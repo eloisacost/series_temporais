@@ -1,0 +1,331 @@
+---
+title: "Análise e Previsão da Inadimplência do Consumidor"
+author: "Eloísa da Silva Costa"
+date: ""
+lang: pt
+format: 
+  html:
+    toc: false
+    theme: cosmo
+    code-fold: false
+editor: source
+---
+
+```{r, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Carregamento de pacotes
+library(forecast)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(here)
+library(gridExtra)
+
+```
+
+## 1. Introdução
+
+A inadimplência é um indicador crucial da saúde financeira das famílias e do risco de crédito no país. Este trabalho analisa a série temporal da Pesquisa Nacional de Endividamento e Inadimplência do Consumidor (PEIC), apurada pela Confederação Nacional do Comércio (CNC).
+
+O objetivo principal é examinar o comportamento histórico da taxa de famílias com contas em atraso entre 2013 e 2025 e desenvolver um modelo preditivo. Essa projeção visa antecipar cenários futuros, fornecendo subsídios para a tomada de decisão estratégica na concessão e renegociação de crédito.
+
+## 2. Metodologia
+
+A análise foi realizada utilizando a linguagem de programação R (ambiente RStudio). A metodologia adotada foi a de Séries Temporais, ideal para dados coletados sequencialmente.
+
+Para a modelagem, optou-se pelo método de Suavização Exponencial de Holt-Winters (Aditivo). A escolha deste modelo justifica-se pelas características identificadas na análise descritiva dos dados: a presença de uma tendência de crescimento definida e um padrão de sazonalidade constante ao longo dos anos.
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+# 1. Leitura dos Dados
+
+dados_brutos <- read.csv("C:/Users/Elô/Documents/UEPB/SERIES/Projeto 1/data/dados.csv", sep = ";", dec = ",")
+
+# 2. Limpeza e Tratamento
+dados_clean <- dados_brutos %>%
+  rename(data = Data, valor = 2) %>% # Renomeia colunas
+  mutate(
+    # Ajusta formato da data de YYYY.MM para Date real
+    data_formatada = ymd(paste0(str_replace(data, "\\.", "-"), "-01"))
+  )
+
+dados_clean
+
+# 3. Transformação em Objeto TS (Time Series)
+# Frequência 12 (Mensal), Inicio 2013, Mês 1
+ts_inadimplencia <- ts(dados_clean$valor, start = c(2013, 1), frequency = 12)
+
+saveRDS(ts_inadimplencia, "C:/Users/Elô/Documents/UEPB/SERIES/Projeto 1/data/ts_inadimplencia.rds")
+
+```
+
+## 3. Análise Descritiva dos Dados
+
+Para iniciar, analisamos o comportamento histórico da inadimplência nos últimos 12 anos. O objetivo foi identificar visualmente a tendência.
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+library(forecast)
+library(ggplot2)
+library(gridExtra) # Se não tiver, o R instala ou você usa install.packages("gridExtra")
+
+# --- 1. Leitura dos dados ---
+# Ajuste o caminho conforme o seu computador
+
+if(file.exists("../data/ts_inadimplencia.rds")) {
+  ts_dados <- readRDS("../data/ts_inadimplencia.rds")
+} else {
+  ts_dados <- readRDS("C:/Users/Elô/Documents/UEPB/SERIES/Projeto 1/data/ts_inadimplencia.rds")
+}
+```
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+g1 <- autoplot(ts_dados) +
+  ggtitle("Evolução da Inadimplência (2013-2025)") +
+  ylab("Taxa (%)") + xlab("Ano") +
+  theme_minimal() +
+  geom_smooth(method = "lm", se = FALSE, color = "red", linetype = "dashed") # Adicionei linha de tendência
+
+print(g1)
+
+```
+
+Ao analisar o gráfico, fica evidente que estamos lidando com uma série temporal com tendência de crescimento. A linha pontilhada vermelha mostra claramente que a inadimplência não é estática: ela saiu de um patamar próximo a 20% em 2013 e alcançou quase 30% em 2025.
+
+### 3.1. Decomposição
+
+Para entender o que impulsiona esses dados, aplicamos a técnica de decomposição. Isso nos permite separar o que é crescimento real (tendência) do que é apenas movimento repetitivo (sazonalidade).
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+### Mostra Tendência, Sazonalidade e Resíduos separados
+
+decomposicao <- decompose(ts_dados, type = "additive")
+g2 <- autoplot(decomposicao) +
+  ggtitle("Decomposição: Tendência vs Sazonalidade") +
+  theme_minimal()
+
+print(g2)
+```
+
+Tendência: É a linha que mostra a direção real, ignorando os altos e baixos de cada mês. 
+
+Sazonalidade: Mostra um padrão de 'ondas' que se repete perfeitamente todo ano. Isso prova que a inadimplência tem meses certos para subir e descer, e esse comportamento é muito previsível.
+
+Resíduos: É o que sobra, o que o modelo não conseguiu explicar pelo padrão normal. As barras maiores aparecem justamente em épocas de crise (como 2015 e 2020).
+
+### 3.2. Sazonalidade
+
+Com a sazonalidade investigamos se existe um padrão mensal fixo. O gráfico de subséries abaixo compara o desempenho de cada mês ao longo da década para confirmar ciclos repetitivos.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# --- 4. Sazonalidade Detalhada ---
+# O ggsubseriesplot mostra a média de cada mês e como ele variou ao longo dos anos
+g3 <- ggsubseriesplot(ts_dados) +
+  ggtitle("Variação por Mês (Subséries)") +
+  ylab("Taxa (%)") +
+  theme_minimal()
+
+print(g3)
+
+```
+
+Este gráfico detalha como cada mês se comportou ao longo da última década. As linhas pretas dentro de cada mês mostram a evolução ano a ano.
+
+As linhas azuis representam a média histórica de cada mês. Observando a altura dessas linhas, conseguimos identificar quais meses têm, em média, taxas mais altas ou mais baixas.
+
+### 3.4. Correlogramas (ACF e PACF)
+
+Para definir o modelo estatístico, analisamos a 'memória' da série. Os correlogramas indicam a dependência temporal e justificam a necessidade de um modelo robusto como o Holt-Winters.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# --- 5. Correlogramas (ACF e PACF) ---
+# Isso mostra matematicamente a "memória" da série
+g_acf <- ggAcf(ts_dados) + ggtitle("Autocorrelação (ACF)") + theme_minimal()
+g_pacf <- ggPacf(ts_dados) + ggtitle("Autocorrelação Parcial (PACF)") + theme_minimal()
+
+# Imprime os dois juntos ou separados
+print(g_acf)
+
+
+```
+
+A autocorrelação apresenta um decaimento muito lento. Isso é a assinatura clássica de uma série não estacionária com forte tendência. Significa que o dado de hoje é fortemente influenciado por todo o histórico passado.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+print(g_pacf)
+
+```
+
+Na autocorrelação parcial, vemos um pico altíssimo no primeiro lag e depois quase nada significativo. Isso indica que a informação mais relevante para prever o mês seguinte é o mês anterior.
+
+### 3.5. Plot Polar
+
+Para examinar a ciclicidade da inadimplência sob uma perspectiva anual comparativa, optou-se pela representação em coordenadas polares.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# --- 6. Plot Polar ---
+# Mostra o ciclo como um relógio. Ajuda a ver se existe um ciclo repetitivo forte.
+g_polar <- ggseasonplot(ts_dados, polar = TRUE) +
+  ggtitle("Ciclo Sazonal (Polar)") +
+  theme_minimal()
+
+print(g_polar)
+
+```
+
+O círculo menor (vermelho) representa 2013, e a espiral vai crescendo para fora até chegar no círculo maior (rosa) de 2025. Ja o formato, que não é um círculo perfeito, ilustra as variações sazonais que distorcem a curva sempre nas mesmas direções.
+
+## 4. Modelagem e Previsão
+
+Antes de prever o futuro, testamos o modelo. Separamos o ano de 2025 para verificar se a ferramenta conseguiria acertar o que realmente aconteceu.
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# --- 1. Leitura dos dados ---
+# Sistema de caminhos
+
+if(file.exists("../data/ts_inadimplencia.rds")) {
+  ts_dados <- readRDS("../data/ts_inadimplencia.rds")
+} else {
+  ts_dados <- readRDS("C:/Users/Elô/Documents/UEPB/SERIES/Projeto 1/data/ts_inadimplencia.rds")
+}
+
+```
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# --- 2. Divisão treino e teste ---
+# Treino: Até Dez/2024
+# Teste: Jan/2025 em diante (para ver se o modelo acerta)
+
+treino <- window(ts_dados, end = c(2024, 12))
+teste  <- window(ts_dados, start = c(2025, 1))
+
+```
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# --- 3. Treinamento (Holt-Winters) ---
+# Otimização automática de alpha, beta e gamma
+
+modelo_hw <- HoltWinters(treino)
+modelo_hw
+
+# --- 4. Validação (Forecast nos dados de Teste) ---
+previsao_teste <- forecast(modelo_hw, h = length(teste))
+previsao_teste
+```
+
+Para validar a capacidade preditiva, foi aplicado o modelo Holt-Winters nos dados de treino (2013-2024) e projetamos o ano de 2025. Divisão treino e teste, treino: Até Dez/2024 e teste: Jan/2025 em diante (para ver se o modelo acerta).
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# A) Gráfico: Real vs Previsto (Fundamental para justificar o modelo)
+# Mostra se a linha azul (previsão) acompanhou a linha preta (realidade)
+g_validacao <- autoplot(treino) +
+  autolayer(previsao_teste, series="Previsão (Modelo)", PI=FALSE) +
+  autolayer(teste, series="Dados Reais (Teste)") +
+  ggtitle("Validação do Modelo: Previsão vs Realidade (2025)") +
+  xlab("Ano") + ylab("Taxa (%)") +
+  theme_minimal() +
+  scale_color_manual(values=c("black", "red"))
+
+print(g_validacao) 
+```
+
+A linha vermelha, que representa a previsão feita pelo modelo para 2025, acompanha com alta fidelidade a linha preta (dados reais observados no mesmo período). O modelo previu corretamente que a inadimplência continuaria subindo em 2025, não subestimando o crescimento da dívida.
+
+### 4.1. Calibragem do Modelo
+
+O modelo Holt-Winters (Aditivo) foi ajustado automaticamente aos dados de treino. A análise dos parâmetros resultantes nos permite entender a dinâmica interna da série:
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# --- Tabela de Parâmetros ---
+tabela_params <- data.frame(
+  Parametro = c("Alpha (Nível)", "Beta (Tendência)", "Gamma (Sazonalidade)"),
+  Valor = c(0.7183, 0.0293, 1.0000),
+  Significado = c("Alta sensibilidade ao curto prazo", 
+                  "Crescimento estável", 
+                  "Sazonalidade altamente adaptável")
+)
+
+knitr::kable(tabela_params, caption = "Parâmetros de Suavização do Modelo Holt-Winters")
+
+```
+
+O valor elevado indica que o nível da série muda rapidamente. A inadimplência tem "memória curta", sendo fortemente influenciada pelos dados mais recentes.
+
+O valor baixo sugere que a inclinação da tendência é estável. O crescimento da inadimplência é constante e não sofre mudanças bruscas de direção.
+
+O parâmetro máximo indica que o padrão sazonal é altamente adaptável, baseando-se no último ano observado para projetar os picos futuros.
+
+### 4.2. Métricas de Desempenho
+
+Para quantificar a precisão do modelo, analisamos os erros obtidos na base de teste (2025), comparando o que o modelo previu contra o que realmente aconteceu.
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+#B) Métricas de Desempenho
+
+print("--- MÉTRICAS DE ACURÁCIA (RMSE, MAPE) ---")
+print(accuracy(previsao_teste, teste))
+
+```
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Tabela de Acurácia Formatada
+metricas <- data.frame(
+  Conjunto = c("Treino (2013-2024)", "Teste (2025)"),
+  RMSE = c(0.0067, 0.0035),
+  MAPE_Porcentagem = c("2.15%", "1.06%")
+)
+
+knitr::kable(metricas, caption = "Comparativo de Acurácia: Treino vs Teste")
+```
+
+Erro Percentual Absoluto Médio: O modelo apresentou um erro de apenas 1,06% nos dados de teste. Isso significa que, se a taxa de inadimplência real fosse 30%, o modelo erraria por uma margem mínima.
+
+Raiz do Erro Quadrático Médio: O valor de 0,0035 no teste indica que os desvios padrão dos resíduos são mínimos.
+
+### 4.3. Diagnótico de Resíduos 
+
+Após confirmar a precisão dos números. O diagnóstico abaixo analisa os erros de previsão (resíduos) para confirmar se eles são puramente aleatórios, o que é a prova final de que o modelo extraiu todas as informações úteis da série temporal.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# --- 5. Diagnóstico de resíduos ---
+# Isso justifica se o modelo é bom. Se o p-valor > 0.05, é um ótimo sinal (Ruído Branco).
+print("--- DIAGNÓSTICO DE RESÍDUOS (Ljung-Box) ---")
+checkresiduals(modelo_hw) # Gera gráfico de resíduos e teste Ljung-Box
+```
+
+A análise visual indica que os resíduos se comportam de forma estável e o modelo apresenta alta capacidade preditiva (MAPE ~1%), embora testes estatísticos rigorosos sugiram leves correlações remanescentes, comuns em séries econômicas complexas.
+
+## 5. Previsão Final
+
+Com o modelo validado, projetamos o cenário para os próximos 12 meses, considerando os intervalos de confiança estatísticos.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Agora usamos TODA a base para prever o desconhecido
+modelo_final <- HoltWinters(ts_dados)
+previsao_futura <- forecast(modelo_final, h = 12)
+
+# Gráfico Final
+g_final <- autoplot(previsao_futura) +
+  ggtitle("Previsão Final de Inadimplência (Próximos 12 meses)") +
+  ylab("Taxa (%)") +
+  theme_minimal()
+
+print(g_final) 
+
+```
+
+O gráfico final apresenta a previsão gerada pelo modelo Holt-Winters para o próximo ano. A linha azul sólida representa a estimativa média, enquanto as faixas sombreadas indicam os intervalos de confiança (80% na faixa escura e 95% na faixa clara
+
+## 6. Conclusão
+
+A análise dos dados da PEIC entre 2013 e 2025 mostrou que a inadimplência no Brasil vem crescendo bastante: saiu de 20% e hoje está perto de 30%. Além de subir, ela segue um padrão que se repete todo ano (sazonalidade), sempre aumentando nos mesmos meses.
+
+Para prever o futuro, usamos o modelo Holt-Winters. Ele funcionou muito bem, errando apenas 1% (MAPE) quando testamos com os dados de 2025.
+
+Diante da alta previsibilidade dos picos sazonais (tipicamente no início do ano), recomenda-se que instituições financeiras e o varejo antecipem medidas de mitigação. Ações como campanhas de renegociação e educação financeira devem ser intensificadas estrategicamente nos meses de novembro e dezembro, atuando de forma preventiva antes que a curva atinja seu ápice sazonal previsto.
