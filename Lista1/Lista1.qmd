@@ -1,0 +1,325 @@
+---
+title: "Lista 1 - Séries Temporais"
+author: "Eloísa da Silva Costa"
+format: html
+---
+
+## Introdução
+
+Este relatório apresenta a análise de séries temporais em três contextos distintos: as variáveis climáticas da cidade de Delhi entre 2013 e 2017, com foco na identificação de tendências e sazonalidade em diferentes escalas (diária, mensal e trimestral); a evolução da vacinação contra a COVID-19 no Brasil, atualizada diariamente; e os dados de desmatamento da Amazônia Legal, disponibilizados pelo PRODES, avaliados em termos de variação temporal e possíveis padrões de tendência.
+
+---
+
+## Bibliotecas
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: true
+
+library(TSA)
+library(forecast)
+library(fpp3)
+library(readr)
+library(readxl)
+library(dplyr)
+
+```
+
+## Questão 1 
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: true
+
+# Carregamento dos Dados
+
+Clima <- read_csv("C:/Users/Elô/Documents/UEPB/SERIES/archive/DailyDelhiClimateTrain.csv")
+
+```
+
+Os dados contêm variáveis diárias de clima em Delhi:
+
+Temperatura média (meantemp),
+Umidade (humidity),
+Pressão Média (meanpressure),
+Velocidade do vento (wind_speed). 
+
+## 1. Série Temporal - Diária
+
+```{r}
+# Transformar os dados em uma série temporal
+serie_diario <- Clima %>%
+  as_tsibble(index = date)
+
+serie_diario %>%
+  pivot_longer(-date) %>%
+  ggplot(aes(x = date, y = value, colour = name)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y") +
+  labs(title = "Série Temporal das Variáveis Climáticas - Diário",
+       x = "Data", y = "Valor")
+```
+
+A temperatura média exibe uma variação clara ao longo do tempo, enquanto a umidade e a velocidade do vento também mostram variações, mas com padrões menos evidentes.
+
+## Sazonalidade diária
+
+``` {r}
+serie_diario %>% gg_season(meantemp) + labs(title = "Temperatura Média - Padrão Diário")
+
+```
+
+A temperatura sobe durante a metade do ano, atingindo picos no meio, e depois cai novamente no final do ano, caracterizando uma sazonalidade clara, típica de regiões com clima tropical ou temperado.
+
+```{r}
+serie_diario %>% gg_season(humidity) + labs(title = "Umidade - Padrão Diário")
+```
+
+A umidade segue um padrão sazonal claro, com picos de umidade mais alta no final do ano e quedas no início. Esse padrão é repetido ao longo dos anos, sugerindo uma variação sazonal estável.
+
+```{r}
+serie_diario %>% gg_season(wind_speed) + labs(title = "Velocidade do Vento - Padrão Diário")
+```
+
+Embora não haja um padrão sazonal tão claro como na temperatura ou umidade, a velocidade do vento parece ter flutuações regulares, com picos mais frequentes em alguns meses do ano.
+
+```{r}
+serie_diario %>% gg_season(meanpressure) + labs(title = "Pressão Média - Padrão Diário")
+```
+A pressão média, para os anos de 2013 a 2017, não apresenta grandes variações, indicando uma estabilidade nesse parâmetro climático durante o período analisado.
+
+## 2. Série Temporal - Mensal
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: true
+
+# Transformar os dados em uma série temporal
+serie_mensal <- Clima %>%
+  mutate(mes = yearmonth(date)) %>%
+  group_by(mes) %>%
+  summarise(across(meantemp:meanpressure, mean, na.rm = TRUE)) %>%
+  as_tsibble(index = mes)
+
+# Plot mensal
+serie_mensal %>%
+  pivot_longer(-mes) %>%
+  ggplot(aes(x = mes, y = value, colour = name)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y") +
+  labs(title = "Série Temporal Mensal das Variáveis Climáticas")
+```
+A temperatura mostra uma variação sazonal bem definida, com picos de calor no meio do ano e quedas no final. A umidade e a velocidade do vento também apresentam padrões sazonais, mas com maior variação ao longo do ano.
+
+## Sazonalidade Mensal
+
+```{r}
+serie_mensal %>%
+  gg_season(meantemp) + labs(title = "Sazonalidade Mensal - Temperatura Média")
+```
+A temperatura média apresenta um padrão sazonal bem definido. A temperatura aumenta ao longo do primeiro semestre, atingindo o pico em junho/julho e depois diminui no segundo semestre, caindo em novembro/dezembro.
+
+```{r}
+serie_mensal %>%
+  gg_season(humidity) + labs(title = "Sazonalidade Mensal - Umidade Média")
+```
+A umidade tem uma variação sazonal bem definida ao longo dos meses. A umidade é mais alta no meio e no final do ano (junho a dezembro) e mais baixa no início do ano (janeiro a março).
+
+```{r}
+serie_diario %>%
+  gg_season(wind_speed) + labs(title = "Sazonalidade Mensal - Velocidade do vento")
+```
+A velocidade do vento não segue um padrão sazonal bem definido como a temperatura ou a umidade, mas sim um comportamento mais irregular com altos e baixos ao longo do tempo.
+
+```{r}
+serie_mensal %>%
+  gg_season(meanpressure) + labs(title = "Sazonalidade Mensal - Pressão Média")
+
+```
+A pressão média mostra um comportamento mais constante, com pequenas variações de ano para ano. O pico em 2013 em fevereiro é um ponto fora do padrão que merece investigação. Se precisar de mais detalhes ou desejar realizar outras análises, estou à disposição!
+
+
+
+## 3. Série Temporal - Trimestral
+
+``` {r}
+# Transformar os dados em uma série temporal
+serie_trimestral <- Clima %>%
+  mutate(trimestre = yearquarter(date)) %>%
+  group_by(trimestre) %>%
+  summarise(across(meantemp:meanpressure, mean, na.rm = TRUE)) %>%
+  as_tsibble(index = trimestre)
+
+serie_trimestral %>%
+  pivot_longer(-trimestre) %>%
+  ggplot(aes(x = trimestre, y = value, colour = name)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y") +
+  labs(title = "Série Temporal Trimestral das Variáveis Climáticas")
+```
+
+A temperatura média segue o padrão típico de climas temperados ou tropicais, com variações sazonais bem definidas, com os trimestres de maio a setembro mais frescos e os trimestres de outubro a março mais quentes.
+
+A umidade tem variações mais irregulares, com picos em 2013 Q4 e 2017 Q1, mas sem uma sazonalidade muito clara.
+
+A pressão média se mantém relativamente estável, com pequenas flutuações, especialmente no final de 2013 e 2017, mas sem grandes variações sazonais.
+
+A velocidade do vento também tem variações consideráveis, com picos inesperados, principalmente em alguns trimestres de 2014 e 2016, sem um padrão claro.
+
+## Sazonalidade Trimestral
+
+```{r}
+
+serie_trimestral %>%
+  gg_season(meantemp) + labs(title = "Sazonalidade Trimestral - Temperatura Média")
+```
+A temperatura média segue um padrão sazonal claro, com temperaturas mais altas no meio do ano e mais baixas no final. As pequenas variações anuais são indicativas de mudanças climáticas ou influências externas, mas o padrão geral se mantém constante. Todos os anos seguem uma tendência similar, com as temperaturas mais altas no Q3 (meio do ano) e mais baixas no Q4 (final do ano).
+
+```{r}
+serie_trimestral %>%
+  gg_season(humidity) + labs(title = "Sazonalidade Trimestral - Umidade")
+```
+A umidade segue uma sazonalidade previsível, com uma queda nos primeiros meses do ano, um aumento no segundo trimestre, uma estabilidade no meio do ano e uma queda novamente no final. As variações entre os anos não são muito grandes, mas em 2013 houve uma maior oscilação, especialmente no primeiro e segundo trimestres.
+
+```{r}
+serie_trimestral %>%
+  gg_season(wind_speed) + labs(title = "Sazonalidade Trimestral - Velocidade do vento")
+```
+O vento segue um padrão sazonal, com picos no segundo trimestre do ano e uma diminuição no final do ano, indicando variações típicas nas condições climáticas.
+
+```{r}
+serie_trimestral %>%
+  gg_season(meanpressure) + labs(title = "Sazonalidade Trimestral - Pressão Média")
+```
+Em 2013, a pressão atmosférica apresenta picos atípicos e variações extremas que não se repetem nos anos seguintes. Nos demais anos, a pressão segue um padrão estável e constante ao longo dos trimestres.
+
+
+## Questão 2 
+
+```{r}
+# Carregamento dos Dados
+
+vac_br <- read_excel("C:/Users/Elô/Documents/UEPB/SERIES/covid/vac_br.xlsx")
+
+# Converter a coluna de ano para o formato Date
+vac_br$date <- as.Date(vac_br$date, format="%d/%m/%Y")
+
+# Transformar os dados em uma série temporal
+serie <- vac_br %>%
+  as_tsibble(index = date)
+```
+Os dados contêm variáveis do Brasil de pessoas totalmente vacinadas e vacinas diarias.
+
+Pessoas totalmente vacinada: número total de pessoas que receberam todas as doses prescritas pelo protocolo de vacinação. 
+Vacinas diarias: novas doses administradas por dia. 
+
+## Série Temporal das Variáveis de Vacinação no Brasil
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: true
+
+serie <- vac_br %>%
+  select(-location) %>%  
+  select(date, pessoas_totalmente_vacinada, vacinas_diarias) %>% 
+  as_tsibble(index = date)
+
+serie %>%
+  pivot_longer(-date) %>%
+  ggplot(aes(x = date, y = value, colour = name)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y") +
+  labs(title = "Série Temporal das Variáveis de Vacinação no Brasil",
+       x = "Data", y = "Valor") +
+  theme_minimal()
+```
+O processo de vacinação no Brasil seguiu um padrão global típico: um crescimento rápido no início, impulsionado por campanhas urgentes para conter a pandemia, seguido de uma desaceleração à medida que a população foi se vacinando em maior escala.
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: true
+
+# Identificando se há sazonalidade
+serie %>%
+  gg_season(pessoas_totalmente_vacinada) + labs(title = "Sazonalidade - Totalmente vacinadas")
+```
+A curva de vacinação reflete um crescimento inicial acelerado em 2021, uma estabilização no segundo ano e um crescimento gradual no terceiro ano, com menor intensidade. Esse comportamento é típico de um processo de vacinação em massa, onde a maior parte da população é vacinada inicialmente, e os esforços seguem com a aplicação de reforços e novas vacinas.
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: true
+
+serie %>%
+  gg_season(vacinas_diarias) + labs(title = "Sazonalidade - Vacinas diarias")
+```
+Em 2021, as vacinas diárias atingiram um pico muito alto logo no início do ano, refletindo o início da vacinação em massa no país. Em 2022, o número de vacinas administradas por dia segue uma tendência de queda gradual, mas com alguns picos visíveis. Em 2023, o número de vacinas diárias é muito mais baixo, com picos isolados.
+
+## Questão 3
+
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: true
+
+# Carregamento dos Dados
+des <- read_csv("C:/Users/Elô/Documents/UEPB/SERIES/des/des.csv")
+  
+# Converter a coluna de ano para o formato Date
+des$referencia <- as.Date(as.character(des$referencia), format = "%Y")
+
+```
+O banco de dados contém variáveis que representam os valores de desmatamento para diferentes estados do Brasil ao longo dos anos, com a variável "area_total_desmatamento" sendo a soma de todos os desmatamentos nos estados registrados.
+
+``` {r}
+# Transformar os dados em uma série temporal
+serie <- des %>%
+  select(referencia, area_total_desmatamento) %>%
+  as_tsibble(index = referencia)
+
+serie_estado <- des %>%
+  select(referencia, acre, amazonas, amapa, maranhao, mato_grosso, para, rondonia, roraima, tocantins, area_total_desmatamento) %>%
+  gather(key = "estado", value = "area_desmatada", -referencia)
+```
+
+```{r}
+# Gráfico para cada estado
+ggplot(serie_estado, aes(x = referencia, y = area_desmatada, colour = estado)) +
+  geom_line() +
+  facet_wrap(~ estado, scales = "free_y") +
+  labs(title = "Série Temporal de Desmatamento por Estado",
+       x = "Ano", y = "Área de Desmatamento (hectares)") +
+  theme_minimal()
+```
+Os maiores níveis de desmatamento estão concentrados em estados como Amazonas, Mato Grosso, Pará e Rondônia, com valores elevados, especialmente no final do século 20.
+
+A partir de 2010, muitos desses estados mostraram uma redução no ritmo de desmatamento, mas os valores ainda são altos.
+
+A variação entre os estados mostra que o desmatamento no Brasil não é homogêneo, com algumas regiões tendo uma maior intensidade de desmatamento devido à expansão da agricultura e ao uso de recursos naturais.
+
+Alguns estados como Amazonas, Mato Grosso, Pará e Rondônia mostram tendência crescente, enquanto estados como Acre e Maranhão indicam tendência de queda no desmatamento.
+
+Há sinais de sazonalidade mais visíveis em Roraima e Tocantins, com variações mais regulares ao longo dos anos, mas a sazonalidade não é forte o suficiente em muitos estados para ser considerada um fator principal.
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: true
+
+# Visualização da série temporal área total 
+ggplot(serie, aes(x = referencia, y = area_total_desmatamento)) +
+  geom_line(color = "blue", size = 1) +
+  geom_smooth(method = "lm", se = FALSE, color = "red", linetype = "dashed") +
+  labs(title = "Série Temporal com Linha de Tendência - Desmatamento Total",
+       x = "Ano", y = "Área Total de Desmatamento (hectares)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+O desmatamento no Brasil teve um pico inicial elevado, seguido por uma redução constante durante os anos 2000 e 2010, até que, nos últimos anos, houve um aumento novamente, o que pode ser preocupante para a preservação ambiental. A mudança de tendência no final pode indicar desafios contínuos para a proteção das florestas.
+
