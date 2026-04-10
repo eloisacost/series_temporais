@@ -1,0 +1,250 @@
+---
+title: "Análise de Séries Temporais com Modelo ARIMA"
+subtitle: "Inadimplência do Consumidor (PEIC)"
+author: "Eloísa da Silva Costa"
+format: 
+  html:
+    theme: flatly
+    toc: false
+    number-sections: false
+    code-fold: false
+    code-summary: "Mostrar Código R"
+execute:
+  warning: false
+  message: false
+---
+
+## Introdução
+
+O endividamento e a inadimplência das famílias brasileiras são termômetros cruciais para a saúde econômica do país. Altos índices de inadimplência reduzem o poder de compra, retraem o varejo e aumentam o risco de crédito para as instituições financeiras.
+
+Utilizamos dados históricos da Pesquisa de Endividamento e Inadimplência do Consumidor (PEIC) para construir um modelo preditivo baseado em Séries Temporais. Através da modelagem, é possível extrair a tendência histórica e projetar o comportamento futuro da inadimplência, permitindo tomadas de decisão baseadas em dados para o ano de 2026.
+
+------------------------------------------------------------------------
+
+## Análise Exploratória
+
+Nesta etapa inicial, importamos os dados mensais da PEIC (de 2013 a 2025) e analisamos visualmente as principais características da série.
+
+```{r preparacao, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(fpp3)
+library(knitr)
+
+# Importação dos dados
+
+dados_peic <- read.csv("/Users/eloisa/Documents/UEPB 2/SERIES/Projeto 2/ARIMA_PEIC/data/dados_inadin.csv", sep = ";", dec = ",")
+
+peic_ts <- dados_peic %>%
+    mutate(Data = ym(as.character(Data)), Mes = yearmonth(Data)) %>%
+    select(Mes, valor = endividamento.e.inadimplência.do.consumidor) %>% 
+    as_tsibble(index = Mes)
+
+```
+
+#### Comportamento da Série
+
+```{r serie original, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+g_original <- autoplot(peic_ts, valor) +
+  labs(title = "Taxa de Inadimplência Original (PEIC)", 
+       x = "Mês", y = "Taxa (%)") +
+  theme_minimal()
+print(g_original)
+
+```
+
+A série possui, forte presença de tendência e visualmente uma ausência de sazonalidade.
+
+#### Análise da série
+
+```{r serie acf pacf ori, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+acf <- peic_ts %>%
+    ACF(valor, lag_max = 20) %>% 
+    autoplot() +
+    labs(title = "ACF")
+  
+  pacf <- peic_ts %>%
+    PACF(valor, lag_max = 20) %>% 
+    autoplot() +
+    labs(title = "PACF")
+  
+  gridExtra::grid.arrange(
+    g_original, acf, pacf,
+    layout_matrix = rbind(c(1,1),c(2,3))
+  )
+```
+
+A série apresenta tendência ao longo do tempo. ACF apresenta decaimento leve, forte autocorrelação (não estacionária). PACF com um pico relevante no lag 1 , sugerindo componente AR(1).
+
+#### Teste de estacionariedade na série original
+
+Aplicamos o teste KPSS para verificar se a série é estacionária.
+
+```{r serie teste estacionaridade ori, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+peic_ts %>% features(valor, unitroot_kpss) %>% kable()
+
+```
+
+Um p-valor menor que 0.05 indica que a série é não estacionária.
+
+## Separação treino e teste
+
+Para treinar os modelos, separamos os dados até o final de 2024 para treino e isolamos o ano de 2025 para teste.
+
+```{r treino e teste, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+  treino <- peic_ts %>% filter_index(. ~ "2024 Dec")
+  teste  <- peic_ts %>% filter_index("2025 Jan" ~ .)
+  
+```
+
+## Série diferenciada
+
+```{r diferenciada, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+plot_serieD <- treino %>%
+    autoplot(difference(valor)) +
+    labs(
+      title = "Inadimplencia (diferenciada)",
+      y = "% taxa"
+    )
+plot_serieD
+```
+
+Série diferenciada, oscila em torno de zero sem tendência clara. Indicando uma possível estacionaridade.
+
+#### ACF e PACF da série Diferenciada
+
+```{r acf e pacf dif, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+  acf_D <- treino %>%
+    ACF(difference(valor), lag_max = 20) %>% 
+    autoplot() +
+    labs(title = "ACF")
+  
+  pacf_D <- treino %>%
+    PACF(difference(valor), lag_max = 20) %>% 
+    autoplot() +
+    labs(title = "PACF")
+  
+  gridExtra::grid.arrange(
+    plot_serieD, acf_D, pacf_D,
+    layout_matrix = rbind(c(1,1),c(2,3))
+  )
+```
+
+Ao analisarmos o gráfico da **ACF**, observamos que, após dois lags iniciais de menor expressão, o **lag 3** apresenta uma significância acentuada ao romper a banda de confiança, sugerindo a utilização de um componente de Média Móvel $MA(3)$.
+
+Na PACF há picos nos lags 3 e 5, o que pode indicar componentes autorregressivos, AR(3).
+
+#### Teste de estacionariedade
+
+Um novo teste KPSS foi aplicado para verificar se a série é estacionária.
+
+```{r estacionaridade dif, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+treino %>% features(difference(valor), unitroot_kpss) %>% kable()
+
+```
+
+O novo teste KPSS confirma que, após a diferença, a série tornou-se estacionária (p-valor \> 0.05).
+
+## Ajuste de modelos
+
+Para definir o algoritmo preditivo mais aderente à série, estruturamos uma avaliação comparativa entre múltiplas parametrizações do ARIMA e os modelos clássicos de Suavização Exponencial (ETS).
+
+```{r ajuste mod, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+fit <- treino %>%
+  model(
+    arima_310 = ARIMA(valor ~ pdq(3,1,0)),
+    arima_013 = ARIMA(valor ~ pdq(0,1,3)),
+    arima_312 = ARIMA(valor ~ pdq(3,1,2)),
+    arima_210 = ARIMA(valor ~ pdq(2,1,0)),
+    arima_012 = ARIMA(valor ~ pdq(0,1,2)),
+    arima_212 = ARIMA(valor ~ pdq(2,1,2)),
+    arima_110 = ARIMA(valor ~ pdq(1,1,0)),
+    arima_011 = ARIMA(valor ~ pdq(0,1,1)),
+    arima_111 = ARIMA(valor ~ pdq(1,1,1)),
+    rb = ARIMA(valor ~ pdq(0,1,0)),
+    auto = ARIMA(valor, stepwise = FALSE, approx = FALSE),
+    ETS1 = ETS(valor ~ error("A") + trend("A") + season("N")),
+    ETS2 = ETS(valor ~ error('A') + trend('M') + season('N'))
+  )
+
+```
+
+#### Modelo automático
+
+```{r auto mod, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+  fit %>% select(auto)
+```
+
+O modelo automático selecionado foi um ARIMA(2,1,2), indicando dois termos autorregressivos e dois de média móvel.
+
+#### Desempenho dos modelos
+
+```{r desem, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+glance(fit) 
+```
+
+O AICc do modelo ARIMA(2,1,2) é o menor entre os candidatos, indicando que ele apresenta o melhor equilíbrio entre ajuste da série e complexidade do modelo.
+
+## Análise Visual da Previsão (ano 2025)
+
+G ráfico com todos os modelos prevendo o ano de 2025.
+
+```{r prev1, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+previsao_teste <- fit %>% forecast(new_data = teste)
+
+g_validacao <- previsao_teste %>%
+  autoplot(peic_ts %>% filter_index("2022 Jan" ~ .), level = NULL) +
+  labs(title = "Comparação de Desempenho no Teste (2025)", 
+       x = "Mês", y = "Taxa (%)") +
+  theme_minimal()
+print(g_validacao)
+
+```
+
+Nenhum modelo acompanha perfeitamente os picos e quedas dos dados reais. Os modelos ETS capturam uma leve tendência de crescimento.
+
+## Tabela de Acurácia
+
+```{r acu, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+accuracy(previsao_teste, teste) %>% 
+  arrange(MAPE) %>% 
+  select(.model, RMSE, MAPE) %>% 
+  kable()
+```
+
+O ETS2 apresenta o melhor desempenho (menores erros), seguido pelo ETS1. O melhor ARIMA é o arima_310, mas ainda com erro maior que os modelos ETS. De modo geral, os modelos ETS continuam sendo os mais precisos, superando os modelos ARIMA.
+
+## Previsão Final
+
+o modelo (ETS2) foi treinado com 100% da base histórica para projetar o ano de 2026.
+
+```{r prev final, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+modelo_definitivo <- peic_ts %>%
+  model(
+    campeao = ETS(valor ~ error('A') + trend('M') + season('N'))
+  )
+
+previsao_futuro <- modelo_definitivo %>% forecast(h = "12 months")
+
+g_futuro <- previsao_futuro %>%
+  autoplot(peic_ts %>% filter_index("2020 Jan" ~ .)) +
+  labs(title = "Previsão Oficial: Taxa de Inadimplência para 2026",
+       subtitle = "Projeção com o Modelo ETS(A,M,N)",
+       y = "Taxa (%)", x = "Mês/Ano") +
+  theme_minimal()
+print(g_futuro)
+```
+
+O modelo ETS projeta uma leve tendência de crescimento ao longo de 2026. A taxa deve permanecer próxima de 30%, com pequenas variações.
+
+## Considerações Finais
+
+O presente trabalho teve como objetivo modelar e prever a Taxa de Inadimplência do Consumidor (PEIC). Após a avaliação e competição entre os modelos ARIMA e de Suavização Exponencial (ETS), o modelo ETS(A,M,N) obteve o melhor desempenho preditivo, apresentando o menor erro (MAPE de 1,55%) na base de teste.
+
+A adequação da tendência multiplicativa no modelo vencedor indica que a inadimplência na série estudada possui um crescimento acelerado, característico do acúmulo de juros.
+
+Conclui-se que o modelo ETS(A,M,N) escolhido se mostrou estatisticamente robusto para projetar o cenário de 2026, oferecendo uma estimativa confiável que pode ser utilizada por instituições para o planejamento e ajuste de políticas de concessão de crédito.

@@ -1,0 +1,240 @@
+---
+title: "Análise de Séries Temporais com Modelo SARIMA"
+subtitle: "Índice de Vendas do Varejo"
+author: "Eloísa da Silva Costa"
+format: 
+  html:
+    theme: flatly
+    toc: false
+    number-sections: false
+    code-fold: false
+    code-summary: "Mostrar Código R"
+execute:
+  warning: false
+  message: false
+---
+
+## Introdução
+
+O Índice de Vendas do Varejo (fornecido pelo Banco Central do Brasil) é um dos principais termômetros da economia real. Ele mede o pulso do consumo das famílias e dita o ritmo de produção da indústria.
+
+Diferente de outras métricas econômicas, o varejo sofre oscilações violentas dentro de um mesmo ano. Estoques insuficientes em meses de pico (como a Black Friday e o Natal) causam perda de receita. Por outro lado, excesso de estoque em meses de vale (como janeiro e fevereiro) gera custo de armazenamento e capital imobilizado.
+
+Ao utilizar a modelagem SARIMA para projetar as vendas futuras. Ao contrário de modelos mais simples, o SARIMA é capaz de isolar e aprender duas forças simultaneamente: a tendência macroeconômica de longo prazo e a sazonalidade rígida do calendário, permitindo decisões.
+
+## Análise Exploratória
+
+Nesta etapa, importamos os dados brutos via API do Banco Central (Série Histórica: 2015 a 2024) para analisar o comportamento visual das vendas.
+
+```{r, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+# 1.  pacotes
+library(tidyverse)
+library(fpp3)
+library(dplyr)
+library(TSA)
+library(forecast)
+library(knitr)
+
+# DADOS 
+
+url_bcb <- "https://api.bcb.gov.br/dados/serie/bcdata.sgs.1455/dados?formato=csv"
+dados_brutos <- read.csv(url_bcb, sep = ";", dec = ",")
+
+varejo_ts <- dados_brutos %>%
+  mutate(Data = dmy(data), Mes = yearmonth(Data)) %>%
+  select(Mes, valor) %>%
+  as_tsibble(index = Mes) %>%
+  filter_index("2015 Jan" ~ "2024 Dec")
+
+```
+
+#### Comportamento da série
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# Gráfico da Série Original
+g_original <- autoplot(varejo_ts, valor) +
+  labs(title = "Série Original: Vendas do Varejo", x = "Mês", y = "Índice") +
+  theme_minimal()
+print(g_original)
+```
+
+Ao observar o gráfico da série, notamos o padrão, estes picos anuais regulares confirmam a forte sazonalidade do varejo. Além disso, a altura desses picos varia ao longo dos anos, indicando a presença de uma Tendência.
+
+#### Teste de estacionariedade na série original
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+varejo_ts %>% features(valor, unitroot_kpss)  %>% kable()
+
+```
+
+O Teste KPSS confirma que a série não é estacionária (p-valor \< 0.05).
+
+#### Decomposição da Série
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+g_decomposicao <- varejo_ts %>%
+  model(STL(valor ~ trend(window = 13) + season(window = "periodic"))) %>%
+  components() %>%
+  autoplot() +
+  labs(title = "Decomposição STL da Série Original")
+print(g_decomposicao)
+
+```
+
+A série apresenta tendência de alta no longo prazo e sazonalidade bem marcada, com poucos ruídos fora do padrão.
+
+## Separação treino e teste
+
+Separamos toda a base histórica, de 2015 até dezembro de 2023, exclusivamente para o treinamento. Em seguida, isolamos o ano de 2024 inteiro como a base de teste.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+treino <- varejo_ts %>% filter_index(. ~ "2023 Dec")
+teste  <- varejo_ts %>% filter_index("2024 Jan" ~ .)
+
+```
+
+#### 1ª diferenciação (Sazonal)
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+treino_diff_sazonal <- treino %>%
+  mutate(diff_12 = difference(valor, 12)) %>%
+  drop_na()
+```
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+g_acf_1 <- treino_diff_sazonal %>%
+  gg_tsdisplay(diff_12, plot_type = 'partial', lag_max = 36) +
+  labs(title = "Diferença (Sazonal)", subtitle = "")
+print(g_acf_1)
+```
+
+Notamos que a primeira diferenciação torna a série mais próxima da estacionariedade, embora ainda seja possível observar uma leve tendência.
+
+#### 2ª diferenciação (Tendência) (Sazonal)
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+treino_diff_total <- treino_diff_sazonal %>%
+  mutate(diff_final = difference(diff_12, 1)) %>%
+  drop_na()
+```
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+g_acf_final <- treino_diff_total %>%
+  gg_tsdisplay(diff_final, plot_type = 'partial', lag_max = 36) +
+  labs(title = "Série Totalmente Estacionária", subtitle = "")
+print(g_acf_final)
+```
+
+Com a segunda diferença aplicada, estabilizamos a média da série.
+
+Na ACF, o terceiro lag se mostra forte, o que nos fez testar o MA(3). E aquele lag 12 testamos um MA(1) Sazonal.
+
+Já na PACF, o 4º lag se mostra forte, o que nos fez testar a AR(4). E o lag 12 confirmou o ciclo sazonal, indicando um AR(1) Sazonal.
+
+#### Teste KPSS
+
+Aplicamos o teste KPSS para confirmar a estacionariedade da série.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+treino_diff_total %>% 
+  features(diff_final, unitroot_kpss) %>% kable()
+```
+
+## Ajuste de modelos
+
+Para realizar o ajuste preditivo, estruturamos os nossos modelos com parametrizações construídas com base na leitura visual da ACF (indicando Médias Móveis) e PACF (indicando Autorregressão).
+
+```{r , include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+fit <- treino %>%
+  model(
+   
+    arima_011_011 = ARIMA(valor ~ pdq(0,1,1) + PDQ(0,1,1)),
+    arima_210_011 = ARIMA(valor ~ pdq(2,1,0) + PDQ(0,1,1)),
+    arima_410_011 = ARIMA(valor ~ pdq(4,1,0) + PDQ(0,1,1)),
+    arima_013_011 = ARIMA(valor ~ pdq(0,1,3) + PDQ(0,1,1)),
+    arima_413_011 = ARIMA(valor ~ pdq(4,1,3) + PDQ(0,1,1)),
+    auto = ARIMA(valor, stepwise = FALSE, approx = FALSE)
+  )
+```
+
+#### Modelo automático
+
+```{r auto mod, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+  fit %>% select(auto)
+```
+
+O modelo automático selecionado foi um ARIMA(1,0,0)(0,1,1)\[12\].
+
+#### Desempenho dos modelos
+
+A tabela de diagnóstico revela o comportamento dos modelos durante a fase de treinamento.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+glance(fit)
+```
+
+Se observarmos, o menor AICc (508) é o modelo auto. 
+
+Em seguida, vamos gerar uma previsão do ano de 2024 com todos os modelos com a base teste para visualmente verificar qual modelo melhor se ajustou.
+
+#### Análise Visual da Previsão (Ano de 2024)
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+previsao_teste <- fit %>% forecast(new_data = teste)
+
+```
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+g_validacao <- previsao_teste %>%
+  autoplot(varejo_ts %>% filter_index("2022 Jan" ~ .), level = NULL) +
+  labs(title = "Comparação de Modelos SARIMA no Teste (2024)", x = "Mês", y = "Índice") +
+  theme_minimal()
+print(g_validacao)
+
+```
+
+# Tabela de Acurácia
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+accuracy(previsao_teste, varejo_ts) %>% 
+  arrange(MAPE) %>% 
+  select(.model, RMSE, MAPE)
+```
+
+A tabela de acurácia confirma o que a análise visual já indicava: o modelo com base na leitura da ACF, o ARIMA(0,1,3)(0,1,1)\[12\], foi o que melhor se ajustou.
+
+Ele nos retornou o menor Erro Percentual (MAPE) de apenas 3,71% na previsão de todo o ano de 2024, superando significativamente o algoritmo automático (que obteve 4,40% de erro).
+
+## Previsão Final
+
+Para encerrar, nós pegamos o nosso modelo que melhor se ajustou.
+
+```{r , include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+modelo_definitivo <- varejo_ts %>%
+  model(
+    campeao_elo = ARIMA(valor ~ pdq(0,1,3) + PDQ(0,1,1))
+  )
+
+# Gerando a previsão para os próximos 12 meses (Janeiro a Dezembro de 2025)
+previsao_futuro <- modelo_definitivo %>% forecast(h = "12 months")
+
+g_futuro <- previsao_futuro %>%
+  autoplot(varejo_ts %>% filter_index("2020 Jan" ~ .)) +
+  labs(title = "Previsão: Vendas do Varejo para 2025",
+       subtitle = "ARIMA(0,1,3)(0,1,1)[12]",
+       y = "Índice de Vendas", 
+       x = "Ano/Mês") +
+  theme_minimal()
+
+print(g_futuro)
+```
+
+Notem como a previsão respeita perfeitamente o comportamento histórico do varejo.
+
+## Considerações Finais
+
+Para concluir, este projeto provou na prática que o olhar clínico e a teoria ainda superam os algoritmos automáticos. Ao construirmos manualmente o nosso modelo SARIMA com base na leitura dos gráficos, nós cravamos um erro de apenas 3,7%, o menor de todo o teste. Essa precisão nos permitiu mapear a forte sazonalidade do varejo e gerar uma projeção para 2025. 
+O grande valor final dessa entrega é dar ao mercado uma bússola: com essa curva projetada, qualquer gestor de varejo consegue saber o momento exato de frear as compras de estoque no início do ano e quando acelerar as contratações para a Black Friday e o Natal. É a verdadeira transição da gestão baseada em intuição para a gestão guiada por dados.
